@@ -228,6 +228,7 @@ CREATE TABLE orders (
     client_id INTEGER NOT NULL,
     barber_id INTEGER,
     opened_at TEXT DEFAULT CURRENT_TIMESTAMP,
+    order_number TEXT UNIQUE,
     status TEXT DEFAULT 'aberta', -- aberta, finalizada, cancelada
     FOREIGN KEY(client_id) REFERENCES clients(id),
     FOREIGN KEY(barber_id) REFERENCES barbers(id)
@@ -238,10 +239,12 @@ CREATE TABLE order_items (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     order_id INTEGER NOT NULL,
     service_id INTEGER NOT NULL,
+    qtd INTEGER NOT NULL,
     price REAL NOT NULL,
     FOREIGN KEY(order_id) REFERENCES orders(id),
     FOREIGN KEY(service_id) REFERENCES services(id)
 );
+
 
 
 ''')

@@ -1460,14 +1460,16 @@ def fetch_all_orders():
 
         cursor.execute("""
             SELECT 
-                orders.id,
-                clients.name,
-                orders.total,
-                orders.status,
-                orders.opened_at
-            FROM orders
-            JOIN clients ON clients.id = orders.client_id
-            ORDER BY orders.opened_at DESC
+    orders.id,
+    clients.name,
+    orders.status,
+    orders.opened_at,
+    orders.order_number
+FROM orders 
+JOIN clients ON clients.id = orders.client_id
+WHERE orders.status = 'aberta'
+ORDER BY orders.id;
+
         """)
 
         rows = cursor.fetchall()
@@ -1477,9 +1479,9 @@ def fetch_all_orders():
             {
                 "id": r[0],
                 "cliente": r[1],
-                "total": r[2],
-                "status": r[3],
-                "aberta_em": r[4]
+                "status": r[2],
+                "aberta_em": r[3],
+                "order_number": r[4]
             }
             for r in rows
         ]
@@ -1495,3 +1497,97 @@ def fetch_all_orders():
             "data": [],
             "details": str(e)
         }), 500
+
+
+def delete_order_by_id(id):
+    try:
+        conn = sqlite3.connect("database.db")
+        cursor = conn.cursor()
+
+        # Buscar datetime original
+        cursor.execute('SELECT id, client_id, barber_id, status, order_number FROM orders WHERE id = ?', (id,))
+        result = cursor.fetchone()
+
+        if not result:
+            conn.close()
+            return False, "Comanda não encontrado"
+
+        
+        # Deletar comanda
+        cursor.execute('DELETE FROM orders WHERE id = ?', (id,))
+
+
+        conn.commit()
+        conn.close()
+        return True, "Comanda cancelada com sucesso"
+
+    except Exception as e:
+        return False, str(e)
+
+
+
+def get_order_by_id(id):
+    conn = sqlite3.connect("database.db")
+    cursor = conn.cursor()
+    
+    cursor.execute('''
+        SELECT id, client_id, barber_id, opened_at, status, order_number FROM orders
+            WHERE id = ?
+    ''', (id,))
+    
+    result = cursor.fetchone()
+    conn.close()
+
+    if result:
+        return {
+            "id": result[0],
+            "client_id": result[1],
+            "barber_id": result[2],
+            "opened_at": result[3],
+            "status": result[4],
+            "order_number": result[5]
+        }
+    return None
+
+
+def item_order_by_id(id):
+    conn = sqlite3.connect("database.db")
+    cursor = conn.cursor()
+    
+    cursor.execute('''
+        SELECT id, name, price
+        FROM items
+        WHERE id = ?
+    ''', (id,))
+    
+    result = cursor.fetchone()
+    conn.close()
+
+    if result:
+        return {
+            "id": result[0],
+            "name": result[1],
+            "price": result[2],
+        }
+    return None
+
+
+def insert_item_ordrs(order_id, item_id, name, qtd, price, total):
+    conn = sqlite3.connect("database.db")
+    cursor = conn.cursor()
+    
+    cursor.execute("""
+        INSERT INTO orders_items (order_id, item_id, name, qtd, price, total)
+        VALUES (?, ?, ?, ?, ?, ?)
+    """, (order_id, item_id, item["name"], qtd, price, total))
+    
+    result = cursor.fetchone()
+    conn.close()
+
+    if result:
+        return {
+            "id": result[0],
+            "name": result[1],
+            "price": result[2],
+        }
+    return None 

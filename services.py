@@ -163,9 +163,11 @@ def get_search_service_name():
         return jsonify({ "error": "Usuário não encontrado", "data": [] }), 404
 
     data = request.get_json()
+    print(data)
     name = data.get("name")
 
     if not name:
         return jsonify({ "error": "Nome não fornecido", "data": [] }), 400
 
     return search_service_with_barber(name)
+

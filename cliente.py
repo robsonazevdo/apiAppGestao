@@ -136,3 +136,27 @@ def delete_client_route(client_id):
         return jsonify({"error": "Erro ao deletar cliente", "details": message}), 500
 
     return jsonify({"success": True, "message": message}), 200
+
+
+@clients.route('<int:client_id>', methods=['POST'])  # <- Use POST se estiver usando JSON no body
+def get_search_cliente_id(client_id):
+    auth_header = request.headers.get('Authorization')
+    if not auth_header or not auth_header.startswith("Bearer "):
+        return jsonify({"error": "Token não fornecido"}), 401
+
+    token = auth_header.split(" ")[1]
+    decoded = verify_token(token)
+    if not decoded:
+        return jsonify({"error": "Token inválido ou expirado", "data": [] }), 401
+
+    user = get_user(decoded.get('email'))
+    if not user:
+        return jsonify({ "error": "Usuário não encontrado", "data": [] }), 404
+
+    data = request.get_json()
+    id = data.get("name")
+
+    if not id:
+        return jsonify({ "error": "Nome não fornecido", "data": [] }), 400
+
+    return fetch_search_clients(id)
