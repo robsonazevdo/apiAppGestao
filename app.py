@@ -13,11 +13,13 @@ from package import package
 from barber_schedule import schedule
 from barber_schedule_get import schedule_get
 from orders import orders
-
-
-
-
 from database import get_db, close_connection
+
+
+
+
+
+
 
 
 
@@ -42,7 +44,7 @@ app.register_blueprint(schedule_get)
 app.register_blueprint(orders)
 
 app.teardown_appcontext(close_connection)
-
+ 
 
 
 if __name__ == '__main__':

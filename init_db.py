@@ -228,11 +228,16 @@ CREATE TABLE orders (
     client_id INTEGER NOT NULL,
     barber_id INTEGER,
     opened_at TEXT DEFAULT CURRENT_TIMESTAMP,
-    order_number TEXT UNIQUE,
+    order_number TEXT ,
     status TEXT DEFAULT 'aberta', -- aberta, finalizada, cancelada
+    total REAL,
+    discount REAL DEFAULT 0,
+    payment_method TEXT,
+    total_final REAL,
     FOREIGN KEY(client_id) REFERENCES clients(id),
     FOREIGN KEY(barber_id) REFERENCES barbers(id)
 );
+
 
 
 CREATE TABLE order_items (

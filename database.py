@@ -1,16 +1,20 @@
 import sqlite3
 from flask import g
 
-DATABASE = 'barber.db'
+DB_PATH = "database.db"
 
 def get_db():
-    db = getattr(g, '_database', None)
-    if db is None:
-        db = g._database = sqlite3.connect(DATABASE)
-        db.row_factory = sqlite3.Row  # permite acessar os dados por nome da coluna
-    return db
+    if "db" not in g:
+        conn = sqlite3.connect(
+            DB_PATH,
+            timeout=10,
+        )
+        conn.row_factory = sqlite3.Row
+        g.db = conn
+    return g.db
 
-def close_connection(exception):
-    db = getattr(g, '_database', None)
+
+def close_connection(exception=None):
+    db = g.pop("db", None)
     if db is not None:
         db.close()

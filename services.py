@@ -1,7 +1,8 @@
+import sqlite3
 from flask import Blueprint, request, jsonify
 from utils import verify_token
 from users import get_user
-from consulta import create_barber_service, delete_service, fetch_all_services, fetch_search_service, get_service_by_id, insert_service, search_service_with_barber, update_service
+from consulta import create_barber_service, delete_service, fetch_all_services, fetch_full_services, fetch_search_service, get_service_by_id, insert_service, search_service_with_barber, update_service
 
 
 
@@ -170,4 +171,76 @@ def get_search_service_name():
         return jsonify({ "error": "Nome não fornecido", "data": [] }), 400
 
     return search_service_with_barber(name)
+
+@service.route('/full', methods=['GET'])
+def get_full_services():
+    auth_header = request.headers.get('Authorization')
+    if not auth_header or not auth_header.startswith("Bearer "):
+        return jsonify({"error": "Token não fornecido"}), 401
+
+    token = auth_header.split(" ")[1]
+    decoded = verify_token(token)
+    if not decoded:
+        return jsonify({"error": "Token inválido ou expirado"}), 401
+
+    user = get_user(decoded.get("email"))
+    if not user:
+        return jsonify({"error": "Usuário não encontrado"}), 404
+
+    return fetch_full_services()
+
+
+@service.route('/barber/search', methods=['POST'])
+def search_service_by_barber():
+    auth_header = request.headers.get('Authorization')
+    if not auth_header or not auth_header.startswith("Bearer "):
+        return jsonify({"error": "Token não fornecido"}), 401
+
+    token = auth_header.split(" ")[1]
+    decoded = verify_token(token)
+    if not decoded:
+        return jsonify({"error": "Token inválido ou expirado", "data": []}), 401
+
+    user = get_user(decoded.get('email'))
+    if not user:
+        return jsonify({"error": "Usuário não encontrado", "data": []}), 404
+
+    data = request.get_json()
+    barber_id = data.get("barber_id")
+    
+
+    if not barber_id:
+        return jsonify({"error": "barber_id não fornecido"}), 400
+
+
+    try:
+        conn = sqlite3.connect("database.db")
+        conn.row_factory = sqlite3.Row
+        cur = conn.cursor()
+
+        cur.execute("""
+            SELECT 
+    bs.id AS barber_service_id,
+    s.id AS service_id,
+    s.name AS service_name,
+    bs.price,
+    bs.duration,
+    b.name AS barber_name
+FROM barber_services bs
+JOIN services s ON s.id = bs.service_id
+LEFT JOIN barbers b ON b.id = bs.barber_id
+WHERE bs.barber_id = ?;
+
+        """, (barber_id,))
+
+        result = [dict(row) for row in cur.fetchall()]
+        conn.close()
+
+        return jsonify({
+            "success": True,
+            "data": result
+        }), 200
+
+    except Exception as e:
+        return jsonify({"error": "Erro no servidor", "details": str(e)}), 500
 

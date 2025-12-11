@@ -1,9 +1,10 @@
+import datetime
 from flask import Blueprint, request, jsonify
 from utils import verify_token
 from users import get_user
 import sqlite3
-from consulta import fetch_all_orders, delete_order_by_id, get_order_by_id
-
+from consulta import delete_order_item_by_id, fetch_all_orders, delete_order_by_id, get_order_by_id
+from database import get_db, close_connection
 
 orders = Blueprint("orders", __name__, url_prefix="/orders")
 
@@ -11,117 +12,74 @@ orders = Blueprint("orders", __name__, url_prefix="/orders")
 
 @orders.route("/create", methods=["POST"])
 def create_order():
-    # Verificar token
-    auth_header = request.headers.get("Authorization")
-    if not auth_header or not auth_header.startswith("Bearer "):
-        return jsonify({"error": "Token não fornecido"}), 401
-
-    token = auth_header.split(" ")[1]
-    decoded = verify_token(token)
-    if not decoded:
-        return jsonify({"error": "Token inválido"}), 401
-
-    user = get_user(decoded.get("email"))
-    if not user:
-        return jsonify({"error": "Usuário não encontrado"}), 404
-
-    data = request.get_json()
-
-    order_number = data.get("order_number")
-    client_id = data.get("client_id")
-    barber_id = data.get("barber_id")
-
-    if not order_number:
-        return jsonify({"error": "order_number é obrigatório"}), 400
-    if not client_id:
-        return jsonify({"error": "client_id é obrigatório"}), 400
-
     try:
-        conn = sqlite3.connect("database.db")
+        auth_header = request.headers.get("Authorization")
+        if not auth_header or not auth_header.startswith("Bearer "):
+            return jsonify({"error": "Token não fornecido"}), 401
+
+        token = auth_header.split(" ")[1]
+        decoded = verify_token(token)
+        if not decoded:
+            return jsonify({"error": "Token inválido"}), 401
+
+        user = get_user(decoded.get("email"))
+        if not user:
+            return jsonify({"error": "Usuário não encontrado"}), 404
+
+        opened_at = datetime.datetime.utcnow().strftime("%Y-%m-%d %H:%M:%S")
+
+        data = request.get_json()
+        order_number = data.get("order_number")
+        client_id = data.get("client_id")
+        barber_id = data.get("barber_id")
+
+        if not order_number:
+            return jsonify({"error": "order_number é obrigatório"}), 400
+        if not client_id:
+            return jsonify({"error": "client_id é obrigatório"}), 400
+
+        conn = get_db()
         cursor = conn.cursor()
 
-        # Verifica duplicidade
-        cursor.execute("SELECT id FROM orders WHERE order_number = ?", (order_number,))
-        if cursor.fetchone():
-            return jsonify({
-                "error": "Comanda já existe",
-                "details": "Uma comanda com esse número já está cadastrada"
-            }), 409
-
         cursor.execute("""
-            INSERT INTO orders (order_number, client_id, barber_id, status, opened_at)
-            VALUES (?, ?, ?, 'aberta', datetime('now'))
-        """, (order_number, client_id, barber_id))
+            SELECT status FROM orders
+            WHERE order_number = ?
+            ORDER BY opened_at DESC
+            LIMIT 1
+        """, (order_number,))
+        last = cursor.fetchone()
+
+        if last and last["status"] == "aberta":
+            return jsonify({"error": "Comanda já está aberta"}), 409
+
+        cursor = conn.cursor()
+        cursor.execute("""
+            INSERT INTO orders (
+                client_id,
+                barber_id,
+                opened_at,
+                order_number,
+                status
+            )
+            VALUES (?, ?, ?, ?, 'aberta')
+        """, (client_id, barber_id, opened_at, order_number))
 
         conn.commit()
         order_id = cursor.lastrowid
-        conn.close()
+        cursor.close()
+
 
         return jsonify({
-            "error": "",
-            "order_id": order_id,
-            "order_number": order_number,
-            "status": "aberta",
-            "message": "Comanda criada com sucesso"
+            "message": "Comanda criada com sucesso",
+            "order_id": order_id 
         }), 201
 
     except Exception as e:
+        import traceback
+        traceback.print_exc()
         return jsonify({"error": "Erro ao criar comanda", "details": str(e)}), 500
 
-
-
-
-@orders.route("/<int:id>/items", methods=["POST"])
-def add_items(id):
-    # verifica token
-    auth_header = request.headers.get("Authorization")
-    if not auth_header or not auth_header.startswith("Bearer "):
-        return jsonify({"error": "Token não fornecido"}), 401
-
-    token = auth_header.split(" ")[1]
-    decoded = verify_token(token)
-    if not decoded:
-        return jsonify({"error": "Token inválido"}), 401
-
-    user = get_user(decoded["email"])
-    if not user:
-        return jsonify({"error": "Usuário não encontrado"}), 404
-
-    data = request.get_json()
-
-    item_name = data.get("item_name")
-    quantity = int(data.get("quantity", 1))
-    price = float(data.get("price", 0))
-
-    if not item_name or price <= 0:
-        return jsonify({"error": "item_name e price são obrigatórios"}), 400
-
-    total_item = price * quantity
-
-    try:
-        conn = sqlite3.connect("database.db")
-        cursor = conn.cursor()
-
-        cursor.execute("""
-            INSERT INTO order_items (order_id, item_name, quantity, price, total)
-            VALUES (?, ?, ?, ?, ?)
-        """, (id, item_name, quantity, price, total_item))
-
-        cursor.execute("""
-            UPDATE orders
-            SET total = (SELECT SUM(total) FROM order_items WHERE order_id = ?)
-            WHERE id = ?
-        """, (id, id))
-
-        conn.commit()
-        conn.close()
-
-        return jsonify({"message": "Item adicionado"}), 201
-
-    except Exception as e:
-        return jsonify({"error": "Erro ao adicionar item", "details": str(e)}), 500
-
-
+    
 
 
 @orders.route("/<int:id>/items", methods=["GET"])
@@ -131,13 +89,38 @@ def list_items(id):
         cursor = conn.cursor()
 
         cursor.execute("""
-            SELECT id, item_name, quantity, price, total
-            FROM order_items
-            WHERE order_id = ?
+        SELECT 
+            oi.id AS item_id,
+            oi.qtd,
+            oi.price AS item_price,
+            (oi.qtd * oi.price) AS subtotal,
+
+            s.id AS service_id,
+            s.name AS service_name,
+
+            COALESCE(bs.price, 0) AS barber_price,
+            COALESCE(bs.duration, 0) AS duration,
+
+            b.id AS barber_id,
+            b.name AS barber_name,
+
+            o.total AS item_total,
+            o.id AS order_id
+
+        FROM order_items oi
+        JOIN services s ON s.id = oi.service_id
+        JOIN orders o ON o.id = oi.order_id
+        LEFT JOIN barber_services bs 
+            ON bs.service_id = s.id 
+        AND bs.barber_id = o.barber_id
+        LEFT JOIN barbers b ON b.id = o.barber_id
+
+        WHERE oi.order_id = ?;
         """, (id,))
+        
         rows = cursor.fetchall()
 
-        cursor.execute("SELECT total, status FROM orders WHERE id=?", (id,))
+        cursor.execute("SELECT total, status FROM orders WHERE id = ?", (id,))
         data = cursor.fetchone()
 
         conn.close()
@@ -149,11 +132,21 @@ def list_items(id):
 
         items = [
             {
-                "id": r[0],
-                "item_name": r[1],
-                "quantity": r[2],
-                "price": r[3],
-                "total": r[4]
+                "item_id": r[0],
+                "qtd": r[1],
+                "item_price": r[2],
+                "subtotal": r[3],
+
+                "service_id": r[4],
+                "service_name": r[5],
+
+                "barber_price": r[6],
+                "duration": r[7],
+
+                "barber_id": r[8],
+                "barber_name": r[9],
+
+                "order_id": r[11]  # 👈 ADICIONADO AQUI
             }
             for r in rows
         ]
@@ -161,11 +154,14 @@ def list_items(id):
         return jsonify({
             "items": items,
             "total": total,
-            "status": status
+            "status": status,
         })
 
     except Exception as e:
-        return jsonify({"error": "Erro ao buscar itens", "details": str(e)}), 500
+        return jsonify({
+            "error": "Erro ao buscar itens", 
+            "details": str(e)
+        }), 500
 
 
 
@@ -221,59 +217,120 @@ def cancel_orders(id):
 
 
 
-# =========================================
-# 🔹 Remover item da comanda
-# =========================================
 @orders.route("/<int:order_id>/items/<int:item_id>", methods=["DELETE"])
 def delete_item(order_id, item_id):
     try:
         conn = sqlite3.connect("database.db")
         cursor = conn.cursor()
 
-        cursor.execute("DELETE FROM order_items WHERE id=? AND order_id=?", (item_id, order_id))
+        
+        # CORRETO: id = item_id, order_id = order_id
+        cursor.execute("""
+            DELETE FROM order_items 
+            WHERE id = ? AND order_id = ?
+        """, (item_id, order_id))
 
+        # Recalcula o total corretamente
         cursor.execute("""
             UPDATE orders
-            SET total = (SELECT COALESCE(SUM(total),0) FROM order_items WHERE order_id = ?)
+            SET total = (
+                SELECT COALESCE(SUM(qtd * price), 0) 
+                FROM order_items 
+                WHERE order_id = ?
+            )
             WHERE id = ?
         """, (order_id, order_id))
 
         conn.commit()
         conn.close()
 
-        return jsonify({"message": "Item removido"}), 200
+        return jsonify({
+            "success": True,
+            "message": "Item removido"
+        }), 200
 
     except Exception as e:
-        return jsonify({"error": "Erro ao remover item", "details": str(e)}), 500
+        return jsonify({
+            "success": False,
+            "error": "Erro ao remover item", 
+            "details": str(e)
+        }), 500
+
 
 
 
 # =========================================
 # 🔹 Finalizar comanda
 # =========================================
-@orders.route("/<int:order_id>/finalizar", methods=["POST"])
-def close_order(order_id):
+@orders.route("/number/<order_number>/finalizar", methods=["POST"])
+def finalizar_order(order_number):
     try:
+        data = request.get_json()
+        forma_pagamento = data.get("forma_pagamento")
+        desconto = float(data.get("desconto") or 0)
+
         conn = sqlite3.connect("database.db")
-        cursor = conn.cursor()
+        conn.row_factory = sqlite3.Row
+        cur = conn.cursor()
 
-        cursor.execute("SELECT id FROM orders WHERE id=?", (order_id,))
-        if not cursor.fetchone():
-            return jsonify({"error": "Comanda não encontrada"}), 404
+        # buscar somente a comanda ABERTA mais recente
+        cur.execute("""
+            SELECT id, total, status
+            FROM orders
+            WHERE order_number = ? AND status = 'aberta'
+            ORDER BY opened_at DESC
+            LIMIT 1
+        """, (order_number,))
+        
+        order = cur.fetchone()
 
-        cursor.execute("""
-            UPDATE orders
-            SET status='finalizada'
-            WHERE id=?
+        if not order:
+            return jsonify({"error": "Nenhuma comanda aberta com este número"}), 400
+
+        order_id = order["id"]
+
+        # calcular total real dos itens
+        cur.execute("""
+            SELECT price, qtd 
+            FROM order_items 
+            WHERE order_id = ?
         """, (order_id,))
+        
+        itens = cur.fetchall()
+
+        total = sum(float(i["price"]) * int(i["qtd"]) for i in itens)
+        total_final = max(0, total - desconto)
+
+        # atualizar comanda
+        cur.execute("""
+            UPDATE orders
+            SET 
+                status = 'finalizada',
+                total = ?,
+                discount = ?,
+                total_final = ?,
+                payment_method = ?
+            WHERE id = ? AND status = 'aberta'
+        """, (total, desconto, total_final, forma_pagamento, order_id))
+
+        if cur.rowcount == 0:
+            return jsonify({"error": "Comanda já está finalizada ou cancelada"}), 400
 
         conn.commit()
         conn.close()
 
-        return jsonify({"message": "Comanda finalizada com sucesso"})
+        return jsonify({
+            "order_id": order_id,
+            "order_number": order_number,
+            "total_original": total,
+            "desconto": desconto,
+            "total_final": total_final,
+            "status": "finalizada"
+        }), 200
 
     except Exception as e:
-        return jsonify({"error": "Erro ao finalizar comanda", "details": str(e)}), 500
+        print("Erro ao finalizar:", e)
+        return jsonify({"error": "Erro no servidor", "details": str(e)}), 500
 
 
 
@@ -328,3 +385,140 @@ def get_order(order_id):
 
     except Exception as e:
         return jsonify({"error": "Erro ao buscar comanda", "details": str(e)}), 500
+
+
+@orders.route("/item", methods=["POST"])
+def add_order_item():
+    # --- Autenticação ---
+    auth_header = request.headers.get("Authorization")
+    if not auth_header or not auth_header.startswith("Bearer "):
+        return jsonify({"error": "Token não fornecido"}), 401
+
+    token = auth_header.split(" ")[1]
+    decoded = verify_token(token)
+    if not decoded:
+        return jsonify({"error": "Token inválido"}), 401
+
+    user = get_user(decoded["email"])
+    if not user:
+        return jsonify({"error": "Usuário não encontrado"}), 404
+
+    # --- Dados recebidos ---
+    data = request.get_json()
+    order_id = data.get("comanda_id")
+    service_id = data.get("service_id")
+    client_id = data.get("client_id")
+    barber_id = data.get("barber_id")
+    qtd = int(data.get("qtd", 1))
+    
+    
+    
+    if not order_id or not service_id or not barber_id:
+        return jsonify({"error": "Campos obrigatórios faltando"}), 400
+
+    try:
+        conn = sqlite3.connect("database.db")
+        cursor = conn.cursor()
+
+        # --- Buscar preço do serviço (tabela barber_services) ---
+        cursor.execute("""
+            SELECT price 
+            FROM barber_services
+            WHERE barber_id = ? AND service_id = ?
+        """, (barber_id, service_id))
+
+        row = cursor.fetchone()
+        if not row:
+            return jsonify({"error": "Serviço não encontrado para este barbeiro"}), 404
+
+        price = float(row[0])
+        total_item = price * qtd
+
+        # --- Inserir item ---
+        cursor.execute("""
+            INSERT INTO order_items (order_id, service_id, qtd, price)
+            VALUES (?, ?, ?, ?)
+        """, (order_id, service_id, qtd, price))
+
+        # --- Atualizar total da comanda ---
+        cursor.execute("""
+            UPDATE orders
+            SET total = (
+                SELECT SUM(qtd * price)
+                FROM order_items
+                WHERE order_id = ?
+            )
+            WHERE id = ?
+        """, (order_id, order_id))
+
+        conn.commit()
+        conn.close()
+
+        return jsonify({
+            "success": True,
+            "message": "Item adicionado com sucesso",
+            "item_total": total_item,
+            "price_unitario": price
+        }), 201
+
+    except Exception as e:
+        return jsonify({"error": "Erro ao adicionar item", "details": str(e)}), 500
+
+
+@orders.route("/number/<order_number>", methods=["GET"])
+def get_order_by_number(order_number):
+    try:
+        conn = sqlite3.connect("database.db")
+        cur = conn.cursor()
+
+        # Buscar apenas comanda ABERTA
+        cur.execute("""
+            SELECT id, order_number 
+            FROM orders 
+            WHERE order_number = ? AND status = 'aberta'
+        """, (order_number,))
+        order = cur.fetchone()
+
+        if not order:
+            return jsonify({"error": "Comanda não encontrada ou já finalizada"}), 400
+
+        order_id = order[0]
+
+        # Buscar itens
+        cur.execute("""
+            SELECT 
+                oi.id AS item_id,
+                s.name AS service_name,
+                oi.price AS item_price,
+                oi.qtd AS qtd
+            FROM order_items oi
+            JOIN barber_services bs ON bs.id = oi.service_id
+            JOIN services s ON s.id = bs.service_id
+            WHERE oi.order_id = ?
+        """, (order_id,))
+
+        items_db = cur.fetchall()
+
+        items = []
+        total = 0
+
+        for item in items_db:
+            item_obj = {
+                "item_id": item[0],
+                "service_name": item[1],
+                "item_price": float(item[2]),
+                "qtd": item[3]
+            }
+
+            total += item_obj["item_price"] * item_obj["qtd"]
+            items.append(item_obj)
+
+        return jsonify({
+            "order_number": order_number,
+            "items": items,
+            "total": total
+        })
+
+    except Exception as e:
+        print("Erro:", e)
+        return jsonify({"error": "Erro no servidor"}), 500

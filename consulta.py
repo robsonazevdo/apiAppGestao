@@ -831,6 +831,49 @@ def fetch_all_products():
     return jsonify({"error": "", "data": products})  # <- aqui define "data"
 
 
+def fetch_full_services():
+    try:
+        conn = sqlite3.connect("database.db")
+        conn.row_factory = sqlite3.Row
+        cursor = conn.cursor()
+
+        cursor.execute("""
+            SELECT 
+                s.id AS service_id,
+                s.name AS service_name,
+                bs.id AS barber_service_id,
+                bs.barber_id,
+                b.name AS barber_name,
+                bs.price,
+                bs.duration
+            FROM services s
+            LEFT JOIN barber_services bs ON bs.service_id = s.id
+            LEFT JOIN barbers b ON b.id = bs.barber_id
+            ORDER BY s.name ASC
+        """)
+
+        rows = cursor.fetchall()
+        conn.close()
+
+        result = []
+        for r in rows:
+            result.append({
+                "service_id": r["service_id"],
+                "service_name": r["service_name"],
+                "barber_service_id": r["barber_service_id"],
+                "barber_id": r["barber_id"],
+                "barber_name": r["barber_name"],
+                "price": r["price"],
+                "duration": r["duration"]
+            })
+
+        return jsonify({ "success": True, "data": result }), 200
+
+    except Exception as e:
+        return jsonify({ "success": False, "error": str(e) }), 500
+
+
+
 def insert_products(name, price, cost, unit, description):
     try:
         with sqlite3.connect("database.db", timeout=10) as conn:
@@ -1591,3 +1634,30 @@ def insert_item_ordrs(order_id, item_id, name, qtd, price, total):
             "price": result[2],
         }
     return None 
+
+
+def delete_order_item_by_id(id):
+    try:
+        conn = sqlite3.connect("database.db")
+        cursor = conn.cursor()
+
+        # Buscar datetime original
+        cursor.execute('SELECT id, order_id, service_id, price, qtd FROM order_items WHERE id = ?', (id,))
+        result = cursor.fetchone()
+
+        if not result:
+            conn.close()
+            return False, "Item não encontrado"
+
+        
+        # Deletar comanda
+        cursor.execute('DELETE FROM order_items WHERE id = ?', (id,))
+
+
+        conn.commit()
+        conn.close()
+        return True, "Item removido com sucesso"
+
+    except Exception as e:
+        return False, str(e)
+
