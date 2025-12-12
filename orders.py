@@ -273,9 +273,8 @@ def finalizar_order(order_number):
         conn.row_factory = sqlite3.Row
         cur = conn.cursor()
 
-        # buscar somente a comanda ABERTA mais recente
         cur.execute("""
-            SELECT id, total, status
+            SELECT id, barber_id, status
             FROM orders
             WHERE order_number = ? AND status = 'aberta'
             ORDER BY opened_at DESC
@@ -288,20 +287,15 @@ def finalizar_order(order_number):
             return jsonify({"error": "Nenhuma comanda aberta com este número"}), 400
 
         order_id = order["id"]
+        barber_id = order["barber_id"]
 
-        # calcular total real dos itens
-        cur.execute("""
-            SELECT price, qtd 
-            FROM order_items 
-            WHERE order_id = ?
-        """, (order_id,))
-        
+        cur.execute("SELECT price, qtd FROM order_items WHERE order_id = ?", (order_id,))
         itens = cur.fetchall()
 
         total = sum(float(i["price"]) * int(i["qtd"]) for i in itens)
         total_final = max(0, total - desconto)
 
-        # atualizar comanda
+        # 🔥 ATUALIZAR COMANDA
         cur.execute("""
             UPDATE orders
             SET 
@@ -316,15 +310,29 @@ def finalizar_order(order_number):
         if cur.rowcount == 0:
             return jsonify({"error": "Comanda já está finalizada ou cancelada"}), 400
 
+        # 🔥 INSERIR NO FLUXO DE CAIXA (CORRETO)
+        cur.execute("""
+            INSERT INTO cashflow (barber_id, type, description, amount, payment_method, datetime)
+            VALUES (?, 'entrada', ?, ?, ?, datetime('now'))
+        """, (
+            barber_id,
+            f"Comanda {order_number} finalizada",
+            total_final,
+            forma_pagamento
+        ))
+
         conn.commit()
         conn.close()
 
         return jsonify({
             "order_id": order_id,
             "order_number": order_number,
+            "barber_id": barber_id,
             "total_original": total,
             "desconto": desconto,
             "total_final": total_final,
+            "forma_pagamento": forma_pagamento,
+            "fluxo_registrado": True,
             "status": "finalizada"
         }), 200
 
@@ -469,22 +477,29 @@ def add_order_item():
 def get_order_by_number(order_number):
     try:
         conn = sqlite3.connect("database.db")
+        conn.row_factory = sqlite3.Row  # permite acessar por nome
         cur = conn.cursor()
 
-        # Buscar apenas comanda ABERTA
+        # Buscar comanda + nome do cliente
         cur.execute("""
-            SELECT id, order_number 
-            FROM orders 
-            WHERE order_number = ? AND status = 'aberta'
+            SELECT 
+                o.id,
+                o.order_number,
+                c.name AS client_name
+            FROM orders o
+            JOIN clients c ON c.id = o.client_id
+            WHERE o.order_number = ? 
+              AND o.status = 'aberta'
         """, (order_number,))
+
         order = cur.fetchone()
 
         if not order:
             return jsonify({"error": "Comanda não encontrada ou já finalizada"}), 400
 
-        order_id = order[0]
+        order_id = order["id"]
 
-        # Buscar itens
+        # Buscar itens da comanda
         cur.execute("""
             SELECT 
                 oi.id AS item_id,
@@ -503,18 +518,21 @@ def get_order_by_number(order_number):
         total = 0
 
         for item in items_db:
-            item_obj = {
-                "item_id": item[0],
-                "service_name": item[1],
-                "item_price": float(item[2]),
-                "qtd": item[3]
-            }
+            item_price = float(item["item_price"])
+            qtd = item["qtd"]
 
-            total += item_obj["item_price"] * item_obj["qtd"]
-            items.append(item_obj)
+            items.append({
+                "item_id": item["item_id"],
+                "service_name": item["service_name"],
+                "item_price": item_price,
+                "qtd": qtd
+            })
+
+            total += item_price * qtd
 
         return jsonify({
-            "order_number": order_number,
+            "order_number": order["order_number"],
+            "client_name": order["client_name"],
             "items": items,
             "total": total
         })

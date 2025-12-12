@@ -14,6 +14,7 @@ from barber_schedule import schedule
 from barber_schedule_get import schedule_get
 from orders import orders
 from database import get_db, close_connection
+from cashflow import cashflow
 
 
 
@@ -42,6 +43,7 @@ app.register_blueprint(package)
 app.register_blueprint(schedule)
 app.register_blueprint(schedule_get)
 app.register_blueprint(orders)
+app.register_blueprint(cashflow)
 
 app.teardown_appcontext(close_connection)
  
